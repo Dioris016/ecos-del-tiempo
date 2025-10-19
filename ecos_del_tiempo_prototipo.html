@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Ecos del Tiempo — Prototipo</title>
+<style>
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  #gameContainer{display:flex;flex-direction:column;height:100vh;background:linear-gradient(180deg,#0b1226,#14213d);color:#fff;align-items:center;justify-content:center}
+  canvas{background:radial-gradient(circle at 20% 20%, rgba(255,255,255,0.03), rgba(0,0,0,0));border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.5);max-width:95vw;height:60vh}
+  .ui{width:95vw;max-width:900px;display:flex;justify-content:space-between;align-items:center;margin-top:12px}
+  .btn{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);padding:8px 12px;border-radius:8px;color:inherit;cursor:pointer}
+  .legend{font-size:14px;opacity:0.9}
+  .instructions{max-width:900px;text-align:left;margin-top:10px;font-size:14px;line-height:1.4;color:#e6eef8;background:rgba(255,255,255,0.02);padding:10px;border-radius:8px}
+  .footer{font-size:13px;margin-top:6px;opacity:0.8}
+  @media (max-width:600px){canvas{height:50vh}}
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <h1 style="margin:8px 0 2px 0">Ecos del Tiempo — Prototipo</h1>
+  <canvas id="game" width="1200" height="700" aria-label="Prototipo de juego Ecos del Tiempo"></canvas>
+  <div class="ui">
+    <div class="legend">Época actual: <strong id="eraLabel">Presente</strong></div>
+    <div>
+      <button class="btn" id="switchBtn">Cambiar Época (E)</button>
+      <button class="btn" id="resetBtn">Reiniciar</button>
+    </div>
+  </div>
+
+  <div class="instructions">
+    <strong>Instrucciones:</strong>
+    <ul>
+      <li>Mueve con ← → o A / D. Salta con ↑ o W o Barra espaciadora.</li>
+      <li>Presiona <strong>E</strong> o el botón "Cambiar Época" para alternar entre <em>Pasado</em> y <em>Presente</em>. Las plataformas cambian.</li>
+      <li>El objetivo del prototipo: llegar a la luz amarilla en la esquina superior derecha. Cambiar épocas puede crear o destruir caminos.</li>
+      <li>Funciona en Chrome y cualquier navegador moderno; también en móvil (controles táctiles simplificados).</li>
+    </ul>
+  </div>
+
+  <div class="footer">Prototipo descargable — abre el archivo en Chrome (arrástralo a la barra o usa Ctrl+O).</div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  let width = canvas.width;
+  let height = canvas.height;
+
+  // Responsive canvas scale for different devices
+  function fitCanvas(){
+    const rect = canvas.getBoundingClientRect();
+    const scale = Math.min(window.innerWidth*0.95 / width, (window.innerHeight*0.6) / height);
+    canvas.style.transform = `scale(${scale})`;
+    canvas.style.transformOrigin = 'top left';
+  }
+  window.addEventListener('resize', fitCanvas);
+  fitCanvas();
+
+  const eras = ['Pasado','Presente'];
+  let eraIndex = 1; // start in Presente
+  const eraLabel = document.getElementById('eraLabel');
+  document.getElementById('switchBtn').addEventListener('click', toggleEra);
+  document.getElementById('resetBtn').addEventListener('click', resetLevel);
+
+  function toggleEra(){
+    eraIndex = (eraIndex+1)%eras.length;
+    eraLabel.textContent = eras[eraIndex];
+    // small screen flash
+    flash();
+  }
+
+  // simple level layout: platforms differ by era
+  const levelBase = {
+    playerStart: {x:80,y:height-140},
+    goal: {x: width-140, y: 80, r: 22}
+  };
+
+  function makePlatforms(){
+    if(eraIndex===0){ // Pasado
+      return [
+        {x:40,y:height-60,w:width-80,h:20,solid:true},
+        {x:200,y:height-200,w:180,h:16,solid:true},
+        {x:420,y:height-320,w:160,h:16,solid:true},
+        {x:700,y:height-240,w:120,h:16,solid:true},
+        {x:920,y:height-360,w:180,h:16,solid:true}
+      ];
+    } else { // Presente
+      return [
+        {x:40,y:height-60,w:width-80,h:20,solid:true},
+        {x:160,y:height-260,w:140,h:16,solid:true},
+        {x:360,y:height-360,w:200,h:16,solid:true},
+        {x:660,y:height-300,w:160,h:16,solid:true},
+        {x:940,y:height-220,w:160,h:16,solid:true}
+      ];
+    }
+  }
+
+  let platforms = makePlatforms();
+
+  // player
+  const player = {
+    x: levelBase.playerStart.x,
+    y: levelBase.playerStart.y,
+    w: 28, h:40,
+    vx:0, vy:0,
+    speed: 3.0,
+    jumpPower: -10,
+    onGround: false
+  };
+
+  let keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if(e.key.toLowerCase() === 'e') toggleEra();
+  });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  // touch controls (simple)
+  let touchControls = {left:false,right:false,jump:false};
+  function createTouchButtons(){
+    if('ontouchstart' in window){
+      const left = document.createElement('button');
+      const right = document.createElement('button');
+      const jump = document.createElement('button');
+      left.innerText = '◀'; right.innerText='▶'; jump.innerText='↥';
+      [left,right,jump].forEach(b => b.className='btn touchbtn');
+      left.style.position='fixed'; left.style.left='8px'; left.style.bottom='8px';
+      right.style.position='fixed'; right.style.left='64px'; right.style.bottom='8px';
+      jump.style.position='fixed'; jump.style.right='8px'; jump.style.bottom='8px';
+      document.body.appendChild(left); document.body.appendChild(right); document.body.appendChild(jump);
+      left.addEventListener('touchstart',e=>{touchControls.left=true;e.preventDefault();});
+      left.addEventListener('touchend',e=>{touchControls.left=false;e.preventDefault();});
+      right.addEventListener('touchstart',e=>{touchControls.right=true;e.preventDefault();});
+      right.addEventListener('touchend',e=>{touchControls.right=false;e.preventDefault();});
+      jump.addEventListener('touchstart',e=>{touchControls.jump=true;e.preventDefault();});
+      jump.addEventListener('touchend',e=>{touchControls.jump=false;e.preventDefault();});
+    }
+  }
+  createTouchButtons();
+
+  // simple physics & collision
+  const gravity = 0.6;
+  function update(){
+    // input
+    let moveLeft = keys['arrowleft'] || keys['a'] || touchControls.left;
+    let moveRight = keys['arrowright'] || keys['d'] || touchControls.right;
+    let jump = keys['arrowup'] || keys['w'] || keys[' '] || touchControls.jump;
+
+    if(moveLeft) player.vx = -player.speed;
+    else if(moveRight) player.vx = player.speed;
+    else player.vx = 0;
+
+    // apply gravity
+    player.vy += gravity;
+    player.x += player.vx;
+    player.y += player.vy;
+
+    // simple world bounds
+    if(player.x < 0) player.x = 0;
+    if(player.x + player.w > width) player.x = width - player.w;
+    if(player.y > height){ // fell off
+      resetPlayer();
+    }
+
+    // collisions
+    player.onGround = false;
+    platforms.forEach(p => {
+      if(p.solid){
+        if(rectIntersect(player.x, player.y, player.w, player.h, p.x, p.y, p.w, p.h)){
+          // collide from top
+          if(player.vy > 0 && player.y + player.h - player.vy <= p.y + 1){
+            player.y = p.y - player.h;
+            player.vy = 0;
+            player.onGround = true;
+          } else {
+            // simple horizontal collision push
+            if(player.x + player.w/2 < p.x + p.w/2) player.x = p.x - player.w - 0.1;
+            else player.x = p.x + p.w + 0.1;
+            player.vx = 0;
+          }
+        }
+      }
+    });
+
+    if(jump && player.onGround){
+      player.vy = player.jumpPower;
+      player.onGround = false;
+    }
+
+    // win check
+    const g = levelBase.goal;
+    const dx = (player.x + player.w/2) - g.x;
+    const dy = (player.y + player.h/2) - g.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if(dist < g.r + Math.max(player.w,player.h)/2){
+      // win
+      showWin();
+    }
+  }
+
+  function rectIntersect(x1,y1,w1,h1,x2,y2,w2,h2){
+    return x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2;
+  }
+
+  // drawing
+  function draw(){
+    // background depending on era
+    if(eraIndex===0){
+      // Pasado: warm sky
+      ctx.fillStyle = '#2b1a0f';
+      ctx.fillRect(0,0,width,height);
+      drawGradient('#5e2b0b','#111112');
+    } else {
+      // Presente: cool sky
+      ctx.fillStyle = '#071229';
+      ctx.fillRect(0,0,width,height);
+      drawGradient('#0b3a66','#071229');
+    }
+
+    // draw platforms
+    platforms.forEach(p => {
+      drawPlatform(p);
+    });
+
+    // draw goal (light)
+    const g = levelBase.goal;
+    ctx.beginPath();
+    const grd = ctx.createRadialGradient(g.x, g.y, 6, g.x, g.y, 100);
+    grd.addColorStop(0, 'rgba(255,230,120,1)');
+    grd.addColorStop(1, 'rgba(255,230,120,0.02)');
+    ctx.fillStyle = grd;
+    ctx.arc(g.x, g.y, g.r+18, 0, Math.PI*2);
+    ctx.fill();
+
+    // player
+    ctx.fillStyle = '#fff';
+    // simple player with skirt that changes by era
+    ctx.fillRect(player.x, player.y, player.w, player.h);
+    ctx.fillStyle = eraIndex===0 ? 'rgba(255,200,120,0.3)' : 'rgba(120,200,255,0.18)';
+    ctx.fillRect(player.x-4, player.y+player.h-6, player.w+8, 8);
+
+    // HUD text
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.font = '16px system-ui,Arial';
+    ctx.fillText('Época: ' + eras[eraIndex], 18, 26);
+    ctx.fillText('Objetivo: llegar a la luz', 18, 46);
+  }
+
+  function drawGradient(c1,c2){
+    const g = ctx.createLinearGradient(0,0,0,height);
+    g.addColorStop(0,c1);
+    g.addColorStop(1,c2);
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,width,height);
+  }
+
+  function drawPlatform(p){
+    // platform style differs by era
+    ctx.save();
+    if(eraIndex===0){
+      // Pasado: earthy platforms
+      ctx.fillStyle = '#6b3f1e';
+      ctx.fillRect(p.x,p.y,p.w,p.h);
+      ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+      ctx.strokeRect(p.x,p.y,p.w,p.h);
+    } else {
+      // Presente: metallic platforms
+      ctx.fillStyle = '#2f4858';
+      ctx.fillRect(p.x,p.y,p.w,p.h);
+      ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+      ctx.strokeRect(p.x,p.y,p.w,p.h);
+    }
+    ctx.restore();
+  }
+
+  // win effect
+  let won = false;
+  function showWin(){
+    won = true;
+    // simple overlay
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0,0,width,height);
+    ctx.fillStyle = '#fff';
+    ctx.font = '40px system-ui, Arial';
+    ctx.fillText('¡Has restaurado un fragmento del tiempo!', 80, height/2 - 10);
+    ctx.font = '18px system-ui, Arial';
+    ctx.fillText('Presiona Reiniciar para intentarlo otra vez.', 90, height/2 + 30);
+  }
+
+  // small flash on era change
+  let flashTimer = 0;
+  function flash(){
+    flashTimer = 20;
+    platforms = makePlatforms();
+  }
+
+  function renderLoop(){
+    if(!won){
+      update();
+      draw();
+      if(flashTimer>0){
+        ctx.fillStyle = 'rgba(255,255,255,' + (flashTimer/20*0.12) + ')';
+        ctx.fillRect(0,0,width,height);
+        flashTimer--;
+      }
+    } else {
+      // keep showing win
+      showWin();
+    }
+    requestAnimationFrame(renderLoop);
+  }
+
+  function resetPlayer(){
+    player.x = levelBase.playerStart.x;
+    player.y = levelBase.playerStart.y;
+    player.vx = 0; player.vy = 0;
+  }
+
+  function resetLevel(){
+    won = false;
+    eraIndex = 1;
+    eraLabel.textContent = eras[eraIndex];
+    platforms = makePlatforms();
+    resetPlayer();
+    flash();
+  }
+
+  // initialize
+  resetLevel();
+  renderLoop();
+
+  // helpful listeners
+  function preventSpaceScroll(e){
+    if(e.code === 'Space') e.preventDefault();
+  }
+  window.addEventListener('keydown', preventSpaceScroll);
+
+})();
+</script>
+</body>
+</html>
